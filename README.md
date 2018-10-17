@@ -1,2 +1,2 @@
-# fsp2
-FSP 2.0
+# FSP vol 2.0
+This is Flying salesman problem vol 2.0 repository, better description might come after deadline...
