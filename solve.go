@@ -14,6 +14,7 @@ import (
  *   - we cannot assume any order of input (available testing data are sorted by day or by src, dst, day)
  * - simulated anealing seems to rock best in last challenge
  * - ending in the same area, not city
+ * - index of the first day is 1, 0 has special meaning (flight occuring on every day)
  */
 
  /* TODO:
@@ -232,7 +233,7 @@ func readInput() (p Problem){
 			// fmt.Fprintln(os.Stderr, "Dropping flight", l)
 			continue
 		}
-		if day == 0 && from != City(0) {
+		if day == 1 && from != City(0) {
 			// also flights originating in different than home city are wasteful
 			// fmt.Fprintln(os.Stderr, "Dropping flight", l)
 			continue
