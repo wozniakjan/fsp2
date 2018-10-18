@@ -16,6 +16,11 @@ import (
  * - ending in the same area, not city
  */
 
+ /* TODO:
+  * - solution engine
+  * - search for better solutions for whole time limit
+  */
+
  const MAX_CITIES int = 300
  const MAX_AREAS int = 300
  const MAX_DAYS int = 300
@@ -268,7 +273,8 @@ func readInput() (p Problem){
 		}
 	}
 
-	return Problem{flights, *indices, *areaDb, *lookupA, *lookupC, City(0), areaDb.cityToArea[City(0)], length, timeLimit}
+	return Problem{flights, *indices, *areaDb, *lookupA, *lookupC, 
+		City(0), areaDb.cityToArea[City(0)], length, timeLimit}
 }
 
 /*
@@ -291,23 +297,35 @@ func solve(p Problem){
 }
 
 
-func printSolution(){
-
+func printSolution(s Solution, p Problem){
+	fmt.Println(s.totalCost)
+	for i := 0; i < p.length; i++ {
+		fmt.Println(p.cityLookup.indexToName[s.flights[i].From],
+					p.cityLookup.indexToName[s.flights[i].To],
+					i + 1,
+					s.flights[i].Cost,
+				)
+	}
 }
 
 func main(){
-	//var p Problem
 	start_time := time.Now()
 	p := readInput()
 	solve(p)
-	fmt.Println(p.length)
+	/*fmt.Println(p.length)
 	fmt.Println(len(p.flights))
 	for i := 0; i < 20; i++ {
 		fmt.Println(p.flights[i])
-	}
+	}*/
 	/*for i := 0; i < 5; i++ {
 		fmt.Println(p.indices.areaDayCost[i])
 	}*/
+	/*
+	var s Solution
+	s.totalCost = 666
+	s.flights = p.flights[:50]
+	printSolution(s, p)
+	*/
 
-	fmt.Fprintln(os.Stderr, "Ending", time.Since(start_time))
+	fmt.Fprintln(os.Stderr, "Ending after", time.Since(start_time))
 }
