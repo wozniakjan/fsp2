@@ -278,23 +278,58 @@ func readInput() (p Problem){
 		City(0), areaDb.cityToArea[City(0)], length, timeLimit}
 }
 
-/*
-func naiveSolver(p Problem){
-	// naive algorith taking the cheapest flight from local location 
-	var location City
-	var solution Solution
-	var toGo []Area
-	var visited []Area
-	
-	location = p.start
-	for i := 0; i <= p.length; i++ {
-		//destiantions := []
+
+func indexOf(haystack []Area, needle Area) int {
+	for i, item := range haystack {
+		if item == needle {
+			return i
+		}
 	}
+	return -1
 }
-*/
 
-func solve(p Problem){
+func dfs(path []Flight, location City, visited, toGo []Area, indices FlightIndices) []Flight {
+	//fmt.Println(path)
+	fmt.Println()
+	fmt.Println("v:", visited)
+	fmt.Println("t:", toGo)
 
+	if len(toGo) == 0 {
+		return path
+	}
+	for _, f := range indices.cityDayCost[location][len(visited)+1] {
+		if si := indexOf(toGo, f.ToArea); si != -1 {
+			solution := dfs(append(path, *f), 
+							f.To,
+							append(visited, f.ToArea), 
+							append(toGo[:si], toGo[si+1:]...),
+							indices)
+			if len(solution) != 0 {
+				return solution
+			}
+		}
+	}
+	fmt.Println("got lost!")
+	return []Flight{}
+}
+
+func cost(path []Flight) Money {
+	var cost Money
+	for _, f := range path {
+		cost += f.Cost
+	}
+	return cost
+}
+
+func solve(p Problem) (s Solution){
+	visited := make([]Area, 0, p.length)
+	toGo := make([]Area, 0, p.length)
+	path := make([]Flight, 0, p.length)
+	for i := 0; i < p.length; i++ {
+		toGo = append(toGo, Area(i))
+	}
+	finalPath := dfs(path, 0, visited, toGo, p.indices)
+	return Solution{finalPath, cost(finalPath)}
 }
 
 
@@ -312,7 +347,8 @@ func printSolution(s Solution, p Problem){
 func main(){
 	start_time := time.Now()
 	p := readInput()
-	solve(p)
+	//solve(p)
+	s := solve(p)
 	/*fmt.Println(p.length)
 	fmt.Println(len(p.flights))
 	for i := 0; i < 20; i++ {
@@ -325,8 +361,9 @@ func main(){
 	var s Solution
 	s.totalCost = 666
 	s.flights = p.flights[:50]
-	printSolution(s, p)
+	
 	*/
+	printSolution(s, p)
 
 	fmt.Fprintln(os.Stderr, "Ending after", time.Since(start_time))
 }
