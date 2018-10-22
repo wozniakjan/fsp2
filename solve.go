@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -134,6 +135,23 @@ type comm interface {
 	send(r Solution, originalEngine int) Money
 	done()
 }
+
+type simpleComm struct {
+	solution Solution
+}
+
+func (t *simpleComm) sendSolution(r Solution) Money {
+	t.solution = r
+	return r.totalCost
+}
+func (t *simpleComm) send(r Solution, originalEngine int) Money {
+	panic("not implemented")
+}
+func (t *simpleComm) done() {
+}
+
+
+
 type update struct {
 	solution       Solution
 	engineId       int
@@ -488,23 +506,10 @@ func printSolution(s Solution, p Problem) {
 func main() {
 	start_time := time.Now()
 	p := readInput(bufio.NewScanner(os.Stdin))
-	//solve(p)
-	s := solve(p)
-	/*fmt.Println(p.length)
-	fmt.Println(len(p.flights))
-	for i := 0; i < 20; i++ {
-		fmt.Println(p.flights[i])
-	}*/
-	/*for i := 0; i < 5; i++ {
-		fmt.Println(p.indices.areaDayCost[i])
-	}*/
-	/*
-		var s Solution
-		s.totalCost = 666
-		s.flights = p.flights[:50]
-
-	*/
-	printSolution(s, p)
+	g := Greedy{p.indices, math.MaxInt32}
+	c := &simpleComm{}
+	g.Solve(c, p)
+	printSolution(c.solution, p)
 
 	fmt.Fprintln(os.Stderr, "Ending after", time.Since(start_time))
 }
