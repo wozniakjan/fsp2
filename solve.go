@@ -158,8 +158,6 @@ func (t *simpleComm) send(r Solution, originalEngine int) Money {
 func (t *simpleComm) done() {
 }
 
-
-
 type update struct {
 	solution       Solution
 	engineId       int
@@ -305,13 +303,22 @@ func areaIndex(area string, l *LookupA) Area {
 	return ai
 }
 
+func LastIndexByte(s string, c byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
 func flightSplit(s string, r []string) {
 	/* Splits lines of input into 4 parts
 	   strictly expects format "{3}[A-Z] {3}[A-Z] \d \d"
 	   WARNING: no checks are done at all */
 	r[0] = s[:3]
 	r[1] = s[4:7]
-	pos2 := strings.LastIndexByte(s, ' ')
+	pos2 := LastIndexByte(s, ' ')
 	r[2] = s[8:pos2]
 	r[3] = s[pos2+1:]
 }
@@ -414,8 +421,8 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 		if int(day) == 0 {
 			// this flight takes place on every day, we will generate all the flights instead
 			for i := 1; i <= length; i++ {
-				if toArea == areaDb.cityToArea[0] && int(day) != length {
-					fmt.Fprintln(os.Stderr, "Dropping", day, from, "->", to)
+				if toArea == areaDb.cityToArea[0] && i < length {
+					fmt.Fprintln(os.Stderr, "Dropping", i, from, "->", to, length)
 					continue
 				}
 				f := Flight{from, to, fromArea, toArea, Day(i), cost, 0, 0.0}
