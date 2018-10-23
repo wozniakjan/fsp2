@@ -104,6 +104,13 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 	}
 
 	//dst := d.graph.cityDayCost[lf.To][int(lf.Day+1)%d.graph.size]
+	//fmt.Println(lf, lf.To, lf.Day)
+	if d.graph.cityDayCost[lf.To] == nil {
+		return
+	}
+	if d.graph.cityDayCost[lf.To][lf.Day+1] == nil {
+		return
+	}
 	dst := d.graph.cityDayCost[lf.To][lf.Day+1]
 	for _, f := range dst {
 		partial.fly(f)
@@ -113,13 +120,14 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 }
 
 func (d Greedy) Solve(comm comm, problem Problem) {
-	if problem.length <= 10 {
+	if problem.length <= 1000 {
 		flights := make([]*Flight, 0, problem.length)
 		visited := make([]bool, problem.length, problem.length)
 		partial := partial{flights, visited, problem.length, 0}
 
 		dst := d.graph.cityDayCost[0][1]
 		for _, f := range dst {
+			//fmt.Println(dst)
 			partial.fly(f)
 			d.dfs(comm, &partial)
 			partial.backtrack()
@@ -398,9 +406,18 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 			// fmt.Fprintln(os.Stderr, "Dropping flight", l)
 			continue
 		}
-		if day == 0 {
+		if int(day) != 0 && int(day) != length && toArea == areaDb.cityToArea[0] {
+			// get rid of flights to final destination on different than last day
+			fmt.Fprintln(os.Stderr, "Dropping", day, from, "->", to)
+			continue
+		}
+		if int(day) == 0 {
 			// this flight takes place on every day, we will generate all the flights instead
 			for i := 1; i <= length; i++ {
+				if toArea == areaDb.cityToArea[0] && int(day) != length {
+					fmt.Fprintln(os.Stderr, "Dropping", day, from, "->", to)
+					continue
+				}
 				f := Flight{from, to, fromArea, toArea, Day(i), cost, 0, 0.0}
 				flights = append(flights, f)
 				createIndexAD(indices.areaDayCost, fromArea, Day(i), &f)
@@ -408,6 +425,7 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 			}
 			continue
 		}
+
 		f := Flight{from, to, fromArea, toArea, day, cost, 0, 0.0}
 		flights = append(flights, f)
 		createIndexAD(indices.areaDayCost, fromArea, day, &f)
