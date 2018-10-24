@@ -11,12 +11,9 @@ type testcomm struct {
 	solution Solution
 }
 
-func (t *testcomm) sendSolution(r Solution) Money {
+func (t *testcomm) send(r Solution) Money {
 	t.solution = r
 	return r.totalCost
-}
-func (t *testcomm) send(r Solution, originalEngine int) Money {
-	panic("not implemented")
 }
 func (t *testcomm) done() {
 }
