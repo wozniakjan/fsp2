@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"sort"
 	"strconv"
@@ -48,6 +49,7 @@ type Flight struct {
 type comm interface {
 	send(r Solution) Money
 	done()
+	current() Solution
 }
 type solutionComm struct {
 	best        Solution
@@ -63,6 +65,11 @@ func NewComm(timeout <-chan time.Time) *solutionComm {
 		make(chan bool),
 		timeout,
 	}
+}
+func (c *solutionComm) current() Solution {
+	flights := make([]*Flight, len(c.best.flights))
+	copy(flights, c.best.flights)
+	return Solution{flights, c.best.totalCost}
 }
 func (c *solutionComm) send(r Solution) Money {
 	bestCost := c.best.totalCost
@@ -127,24 +134,98 @@ func (p *partial) backtrack() {
 	p.cost -= f.Cost
 }
 
+func order(i, j int) (int, int) {
+	if i < j {
+		return i, j
+	}
+	return j, i
+}
+
+type sa struct {
+	graph FlightIndices
+}
+
+func (d *sa) run(comm comm, problem Problem) {
+	current := comm.current()
+	cost := current.totalCost
+	best := cost
+	flights := current.flights
+	g := problem.indices.fromDayTo
+	//temp := 0
+	seed := rand.New(rand.NewSource(time.Now().UnixNano()))
+	n := len(current.flights)
+	for {
+		i, j := order(seed.Intn(n-1)+1, seed.Intn(n-1)+1)
+		ok, newCost := swap(current, g, i, j)
+		if ok {
+			//TODO swap back only sometimes
+			if best > newCost {
+				fmt.Fprintln(os.Stderr, "sa new solution")
+				comm.send(Solution{flights, newCost})
+				swap(current, g, i, j)
+			}
+		}
+	}
+}
+
+/*
+0 ---- 1 ---- 2 ---- 3 ---- 4
+A      B      C      D      A
+a->b   b->c   c->d   d->a
+fiPrev fi     fjPrev fj
+a->d   d->c   c->b   b->a
+giPrev gi     gjPrev gj
+*/
+func swap(s Solution, g Graph, i, j int) (bool, Money) {
+	if i == j {
+		return false, 0
+	}
+	flights := s.flights
+	prevI := i - 1
+	prevJ := j - 1
+	fiPrev := flights[prevI]
+	fjPrev := flights[prevJ]
+	giPrev := g.get(fiPrev.From, fiPrev.Day, fjPrev.To)
+	gjPrev := g.get(fjPrev.From, fjPrev.Day, fiPrev.To)
+	fi := flights[i]
+	fj := flights[j]
+	gi := g.get(fj.From, fi.Day, fi.To)
+	gj := g.get(fi.From, fj.Day, fj.To)
+	if giPrev != nil && gjPrev != nil && gi != nil && gj != nil {
+		flights[prevI] = giPrev
+		flights[i] = gi
+		flights[prevJ] = gjPrev
+		flights[j] = gj
+		oldCost := fiPrev.Cost + fi.Cost + fjPrev.Cost + fj.Cost
+		newCost := giPrev.Cost + gi.Cost + gjPrev.Cost + gj.Cost
+		return true, s.totalCost - oldCost + newCost
+	}
+	return false, 0
+}
+
 type Greedy struct {
 	graph       FlightIndices
 	currentBest Money
+	finished    bool
+	endOnFirst  bool
 }
 
 func (d *Greedy) dfs(comm comm, partial *partial) {
+	if d.finished {
+		return
+	}
 	if partial.cost > d.currentBest {
 		return
 	}
 	if partial.roundtrip() {
 		d.currentBest = comm.send(partial.solution())
+		d.finished = d.currentBest == partial.cost && d.endOnFirst
+		return
 	}
-
 	lf := partial.lastFlight()
 	if partial.hasVisited(lf.ToArea) {
 		return
 	}
-
 	//dst := d.graph.cityDayCost[lf.To][int(lf.Day+1)%d.graph.size]
 	if d.graph.cityDayCost[lf.To] == nil {
 		return
@@ -160,21 +241,25 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 	}
 }
 func (d Greedy) Solve(comm comm, problem Problem) {
-	if problem.length <= 1000 {
-		flights := make([]*Flight, 0, problem.length)
-		visited := make([]bool, problem.length, problem.length)
-		partial := partial{flights, visited, problem.length, 0}
+	if len(problem.cityLookup.indexToName) > 10 {
+		d.endOnFirst = true
+	}
+	flights := make([]*Flight, 0, problem.length)
+	visited := make([]bool, problem.length, problem.length)
+	partial := partial{flights, visited, problem.length, 0}
 
-		dst := d.graph.cityDayCost[0][1]
-		for _, f := range dst {
-			//fmt.Println(dst)
-			partial.fly(f)
-			d.dfs(comm, &partial)
-			partial.backtrack()
-		}
+	dst := d.graph.cityDayCost[0][1]
+	for _, f := range dst {
+		partial.fly(f)
+		d.dfs(comm, &partial)
+		partial.backtrack()
+	}
+
+	if !d.endOnFirst {
 		comm.done()
 	} else {
-		//not running
+		sa := sa{}
+		sa.run(comm, problem)
 	}
 }
 
@@ -197,10 +282,22 @@ type LookupC struct {
 	nameToIndex map[string]City
 	indexToName []string
 }
+type Graph [][][]*Flight
+
+func (g *Graph) get(f City, d Day, t City) *Flight {
+	if (*g)[f] == nil {
+		return nil
+	}
+	if (*g)[f][d] == nil {
+		return nil
+	}
+	return (*g)[f][d][t]
+}
 
 type FlightIndices struct {
 	areaDayCost [][][]*Flight // sorted by cost
 	cityDayCost [][][]*Flight // sorted by cost
+	fromDayTo   Graph         // not sorted
 	//dayArea     [][][]*Flight
 	//dayCity     [][][]*Flight
 }
@@ -211,7 +308,7 @@ type AreaDb struct {
 }
 
 type Problem struct {
-	flights []Flight
+	flights []*Flight
 	indices FlightIndices
 	//areas []Area
 	areaDb     AreaDb
@@ -302,7 +399,7 @@ func createIndexAD(slice [][][]*Flight, from Area, day Day, flight *Flight) {
 		slice[from] = make([][]*Flight, MAX_DAYS+1)
 	}
 	if slice[from][day] == nil {
-		slice[from][day] = make([]*Flight, 0, MAX_CITIES*2) // is there a max number of flights from a city on a date?
+		slice[from][day] = make([]*Flight, 0, MAX_CITIES+1) // is there a max number of flights from a city on a date?
 	}
 	slice[from][day] = append(slice[from][day], flight)
 }
@@ -312,17 +409,30 @@ func createIndexCD(slice [][][]*Flight, from City, day Day, flight *Flight) {
 		slice[from] = make([][]*Flight, MAX_DAYS+1)
 	}
 	if slice[from][day] == nil {
-		slice[from][day] = make([]*Flight, 0, MAX_CITIES*2) // is there a max number of flights from a city on a date?
+		slice[from][day] = make([]*Flight, 0, MAX_CITIES+1) // is there a max number of flights from a city on a date?
 	}
 	slice[from][day] = append(slice[from][day], flight)
+}
+
+func fromDayTo(slice [][][]*Flight, f *Flight) {
+	if slice[f.From] == nil {
+		slice[f.From] = make([][]*Flight, MAX_DAYS+1)
+	}
+	if slice[f.From][f.Day] == nil {
+		slice[f.From][f.Day] = make([]*Flight, MAX_CITIES)
+	}
+	if slice[f.From][f.Day][f.To] == nil || slice[f.From][f.Day][f.To].Cost > f.Cost {
+		slice[f.From][f.Day][f.To] = f
+	}
 }
 
 func readInput(stdin *bufio.Scanner) (p Problem) {
 	lookupC := &LookupC{make(map[string]City), make([]string, 0, MAX_CITIES)}
 	lookupA := &LookupA{make(map[string]Area), make([]string, 0, MAX_AREAS)}
 	areaDb := &AreaDb{make(map[City]Area), make(map[Area][]City)}
-	flights := make([]Flight, 0, MAX_FLIGHTS)
+	flights := make([]*Flight, 0, MAX_FLIGHTS)
 	indices := &FlightIndices{make([][][]*Flight, MAX_AREAS),
+		make([][][]*Flight, MAX_CITIES),
 		make([][][]*Flight, MAX_CITIES),
 		//make([][][]*Flight, MAX_DAYS),
 		//make([][][]*Flight, MAX_DAYS),
@@ -399,18 +509,19 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 					// fmt.Fprintln(os.Stderr, "Dropping", i, from, "->", to, length)
 					continue
 				}
-				f := Flight{from, to, fromArea, toArea, Day(i), cost, 0, 0.0}
+				f := &Flight{from, to, fromArea, toArea, Day(i), cost, 0, 0.0}
 				flights = append(flights, f)
-				createIndexAD(indices.areaDayCost, fromArea, Day(i), &f)
-				createIndexCD(indices.cityDayCost, from, Day(i), &f)
+				createIndexAD(indices.areaDayCost, fromArea, Day(i), f)
+				createIndexCD(indices.cityDayCost, from, Day(i), f)
+				fromDayTo(indices.fromDayTo, f)
 			}
 			continue
 		}
 
-		f := Flight{from, to, fromArea, toArea, day, cost, 0, 0.0}
+		f := &Flight{from, to, fromArea, toArea, day, cost, 0, 0.0}
 		flights = append(flights, f)
-		createIndexAD(indices.areaDayCost, fromArea, day, &f)
-		createIndexCD(indices.cityDayCost, from, day, &f)
+		createIndexAD(indices.areaDayCost, fromArea, day, f)
+		createIndexCD(indices.cityDayCost, from, day, f)
 
 	}
 	if length <= 20 {
@@ -460,7 +571,7 @@ func main() {
 	start_time := time.Now()
 	//defer profile.Start(profile.MemProfile).Stop()
 	p := readInput(bufio.NewScanner(os.Stdin))
-	g := Greedy{p.indices, math.MaxInt32}
+	g := Greedy{graph: p.indices, currentBest: math.MaxInt32}
 	timeout := time.After(p.timeLimit*time.Second - time.Since(start_time) - 20*time.Millisecond)
 	c := NewComm(timeout)
 	go g.Solve(c, p)

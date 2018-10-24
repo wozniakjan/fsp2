@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -16,6 +17,9 @@ func (t *testcomm) send(r Solution) Money {
 	return r.totalCost
 }
 func (t *testcomm) done() {
+}
+func (t *testcomm) current() Solution {
+	return t.solution
 }
 
 func eq(f1, f2 Flight) bool {
@@ -76,7 +80,7 @@ GDO SKT 2 90
 		&Flight{0, 1},
 	}*/
 	p := readInput(bufio.NewScanner(strings.NewReader(input)))
-	g := Greedy{p.indices, math.MaxInt32}
+	g := Greedy{graph: p.indices, currentBest: math.MaxInt32}
 	c := &testcomm{}
 	g.Solve(c, p)
 	printSolution(c.solution, p)
@@ -100,11 +104,136 @@ MXT SKT 2 20
 GDO SKT 2 90
 `
 	p := readInput(bufio.NewScanner(strings.NewReader(input)))
-	g := Greedy{p.indices, math.MaxInt32}
+	g := Greedy{graph: p.indices, currentBest: math.MaxInt32}
 	c := &testcomm{}
 	g.Solve(c, p)
 	printSolution(c.solution, p)
 	if c.solution.totalCost != 100 {
 		t.Fatalf("sample test cost %v != 100", c.solution.totalCost)
+	}
+}
+func mockGraph() Graph {
+	g := emptyGraph()
+	g[1][1][2] = f(1, 2, 1, 5)
+	g[2][2][3] = f(2, 3, 2, 10)
+	g[3][3][4] = f(3, 4, 3, 10)
+	g[4][4][1] = f(4, 1, 4, 10)
+
+	g[1][1][4] = f(1, 4, 1, 10)
+	g[4][2][3] = f(4, 3, 2, 5)
+	g[3][3][2] = f(3, 2, 3, 5)
+	g[2][4][1] = f(2, 1, 4, 10)
+	return g
+}
+func emptyGraph() Graph {
+	s := 5
+	g := Graph{}
+	g = make([][][]*Flight, s)
+	for i := 0; i < s; i++ {
+		g[i] = make([][]*Flight, s)
+		for j := 0; j < s; j++ {
+			g[i][j] = make([]*Flight, s)
+		}
+	}
+	return g
+}
+func f(from City, to City, d Day, c Money) *Flight {
+	return &Flight{from, to, Area(from), Area(to), d, c, 0, 0.0}
+}
+func TestGet(t *testing.T) {
+	tests := []struct {
+		graph    Graph
+		from     City
+		day      Day
+		to       City
+		expected *Flight
+	}{
+		{
+			graph:    mockGraph(),
+			from:     1,
+			day:      1,
+			to:       2,
+			expected: f(1, 2, 1, 5),
+		},
+	}
+	for ti, test := range tests {
+		f := test.graph.get(test.from, test.day, test.to)
+		if !reflect.DeepEqual(test.expected, f) {
+			t.Fatal(ti, "flight mismatch")
+		}
+	}
+}
+func TestSwap(t *testing.T) {
+	tests := []struct {
+		flights  []*Flight
+		graph    Graph
+		expected []*Flight
+		cost     Money
+		i        int
+		j        int
+		ok       bool
+	}{
+		{
+			flights: []*Flight{
+				f(1, 2, 1, 5),
+				f(2, 3, 2, 10),
+				f(3, 4, 3, 10),
+				f(4, 1, 4, 10),
+			},
+			graph: mockGraph(),
+			expected: []*Flight{
+				f(1, 4, 1, 10),
+				f(4, 3, 2, 5),
+				f(3, 2, 3, 5),
+				f(2, 1, 4, 10),
+			},
+			i:    1,
+			j:    3,
+			cost: 30,
+			ok:   true,
+		},
+		{
+			flights: []*Flight{
+				f(1, 2, 1, 5),
+				f(2, 3, 2, 10),
+				f(3, 4, 3, 10),
+				f(4, 1, 4, 10),
+			},
+			graph: emptyGraph(),
+			expected: []*Flight{
+				f(1, 2, 1, 5),
+				f(2, 3, 2, 10),
+				f(3, 4, 3, 10),
+				f(4, 1, 4, 10),
+			},
+			i:    1,
+			j:    2,
+			cost: 0,
+			ok:   false,
+		},
+	}
+	for ti, test := range tests {
+		cpy := make([]*Flight, len(test.flights))
+		copy(cpy, test.flights)
+		ok, newCost := swap(Solution{cpy, cost(test.flights)}, test.graph, test.i, test.j)
+		if newCost != test.cost {
+			t.Fatal(ti, "money mismatch")
+		}
+		if ok != test.ok {
+			t.Fatal(ti, "ok mismatch")
+		}
+		if ok && !reflect.DeepEqual(cpy, test.expected) {
+			t.Fatal(ti, "flight mismatch")
+		}
+		ok, newCost = swap(Solution{cpy, newCost}, test.graph, test.i, test.j)
+		if ok != test.ok {
+			t.Fatal(ti, "back ok mismatch")
+		}
+		if ok && newCost != cost(test.flights) {
+			t.Fatal(ti, "back money mismatch", newCost)
+		}
+		if ok && !reflect.DeepEqual(cpy, test.flights) {
+			t.Fatal(ti, "back flight mismatch")
+		}
 	}
 }
