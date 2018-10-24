@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	//"github.com/pkg/profile"
 )
 
 /* Notes:
@@ -102,8 +101,13 @@ func (p *partial) solution() Solution {
 func (p *partial) roundtrip() bool {
 	ff := p.flights[0]
 	lf := p.lastFlight()
-	isHome := lf.To == ff.From
-	return len(p.visited) == p.n && isHome
+	for _, ok := range p.visited {
+		if !ok {
+			return false
+		}
+	}
+	isHome := lf.ToArea == ff.FromArea
+	return isHome
 }
 func (p *partial) fly(f *Flight) {
 	p.visited[int(f.FromArea)] = true
@@ -457,7 +461,7 @@ func main() {
 	//defer profile.Start(profile.MemProfile).Stop()
 	p := readInput(bufio.NewScanner(os.Stdin))
 	g := Greedy{p.indices, math.MaxInt32}
-	timeout := time.After(p.timeLimit * time.Second - time.Since(start_time) - 20 * time.Millisecond)
+	timeout := time.After(p.timeLimit*time.Second - time.Since(start_time) - 20*time.Millisecond)
 	c := NewComm(timeout)
 	go g.Solve(c, p)
 	c.wait()

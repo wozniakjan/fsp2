@@ -84,3 +84,27 @@ GDO SKT 2 90
 		t.Fatalf("sample test cost %v != 100", c.solution.totalCost)
 	}
 }
+
+func TestAreaSolve(t *testing.T) {
+	input := `3 ASD
+Green
+ASD TMP
+Red
+SKT
+Blue
+MXT GDO
+ASD MXT 1 50
+ASD GDO 1 10
+SKT TMP 0 30
+MXT SKT 2 20
+GDO SKT 2 90
+`
+	p := readInput(bufio.NewScanner(strings.NewReader(input)))
+	g := Greedy{p.indices, math.MaxInt32}
+	c := &testcomm{}
+	g.Solve(c, p)
+	printSolution(c.solution, p)
+	if c.solution.totalCost != 100 {
+		t.Fatalf("sample test cost %v != 100", c.solution.totalCost)
+	}
+}
