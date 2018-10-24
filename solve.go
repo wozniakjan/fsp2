@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	//"github.com/pkg/profile"
 )
 
 /* Notes:
@@ -196,8 +197,8 @@ type LookupC struct {
 type FlightIndices struct {
 	areaDayCost [][][]*Flight // sorted by cost
 	cityDayCost [][][]*Flight // sorted by cost
-	dayArea     [][][]*Flight
-	dayCity     [][][]*Flight
+	//dayArea     [][][]*Flight
+	//dayCity     [][][]*Flight
 }
 
 type AreaDb struct {
@@ -215,7 +216,7 @@ type Problem struct {
 	start      City
 	goal       Area
 	length     int
-	timeLimit  int
+	timeLimit  time.Duration
 }
 
 type byCost []*Flight
@@ -297,7 +298,7 @@ func createIndexAD(slice [][][]*Flight, from Area, day Day, flight *Flight) {
 		slice[from] = make([][]*Flight, MAX_DAYS+1)
 	}
 	if slice[from][day] == nil {
-		slice[from][day] = make([]*Flight, 0, MAX_CITIES*3) // is there a max number of flights from a city on a date?
+		slice[from][day] = make([]*Flight, 0, MAX_CITIES*2) // is there a max number of flights from a city on a date?
 	}
 	slice[from][day] = append(slice[from][day], flight)
 }
@@ -307,7 +308,7 @@ func createIndexCD(slice [][][]*Flight, from City, day Day, flight *Flight) {
 		slice[from] = make([][]*Flight, MAX_DAYS+1)
 	}
 	if slice[from][day] == nil {
-		slice[from][day] = make([]*Flight, 0, MAX_CITIES*3) // is there a max number of flights from a city on a date?
+		slice[from][day] = make([]*Flight, 0, MAX_CITIES*2) // is there a max number of flights from a city on a date?
 	}
 	slice[from][day] = append(slice[from][day], flight)
 }
@@ -319,14 +320,14 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 	flights := make([]Flight, 0, MAX_FLIGHTS)
 	indices := &FlightIndices{make([][][]*Flight, MAX_AREAS),
 		make([][][]*Flight, MAX_CITIES),
-		make([][][]*Flight, MAX_DAYS),
-		make([][][]*Flight, MAX_DAYS),
+		//make([][][]*Flight, MAX_DAYS),
+		//make([][][]*Flight, MAX_DAYS),
 	}
 	line := make([]string, 4)
 
 	var src string
-	var i, timeLimit int
-	var length int
+	var timeLimit time.Duration
+	var length, i int
 	var from, to City
 	var fromArea, toArea Area
 	var day Day
@@ -384,14 +385,14 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 		}
 		if int(day) != 0 && int(day) != length && toArea == areaDb.cityToArea[0] {
 			// get rid of flights to final destination on different than last day
-			fmt.Fprintln(os.Stderr, "Dropping", day, from, "->", to)
+			// fmt.Fprintln(os.Stderr, "Dropping", day, from, "->", to)
 			continue
 		}
 		if int(day) == 0 {
 			// this flight takes place on every day, we will generate all the flights instead
 			for i := 1; i <= length; i++ {
 				if toArea == areaDb.cityToArea[0] && i < length {
-					fmt.Fprintln(os.Stderr, "Dropping", i, from, "->", to, length)
+					// fmt.Fprintln(os.Stderr, "Dropping", i, from, "->", to, length)
 					continue
 				}
 				f := Flight{from, to, fromArea, toArea, Day(i), cost, 0, 0.0}
@@ -453,10 +454,10 @@ func printSolution(s Solution, p Problem) {
 
 func main() {
 	start_time := time.Now()
-	//TODO: proper timeout
-	timeout := time.After(60 * time.Second)
+	//defer profile.Start(profile.MemProfile).Stop()
 	p := readInput(bufio.NewScanner(os.Stdin))
 	g := Greedy{p.indices, math.MaxInt32}
+	timeout := time.After(p.timeLimit * time.Second - time.Since(start_time) - 20 * time.Millisecond)
 	c := NewComm(timeout)
 	go g.Solve(c, p)
 	c.wait()
