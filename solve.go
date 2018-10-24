@@ -241,7 +241,7 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 	}
 }
 func (d Greedy) Solve(comm comm, problem Problem) {
-	if len(problem.cityLookup.indexToName) > 10 {
+	if len(problem.cityLookup.indexToName) > 200 {
 		d.endOnFirst = true
 	}
 	flights := make([]*Flight, 0, problem.length)
@@ -572,7 +572,7 @@ func main() {
 	//defer profile.Start(profile.MemProfile).Stop()
 	p := readInput(bufio.NewScanner(os.Stdin))
 	g := Greedy{graph: p.indices, currentBest: math.MaxInt32}
-	timeout := time.After(p.timeLimit*time.Second - time.Since(start_time) - 20*time.Millisecond)
+	timeout := time.After(p.timeLimit*time.Second - time.Since(start_time) - 45*time.Millisecond)
 	c := NewComm(timeout)
 	go g.Solve(c, p)
 	c.wait()
