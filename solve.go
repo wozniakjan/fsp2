@@ -45,9 +45,47 @@ type Flight struct {
 	Penalty   float64
 }
 
-type Greedy struct {
-	graph       FlightIndices
-	currentBest Money
+type comm interface {
+	send(r Solution) Money
+	done()
+}
+type solutionComm struct {
+	best        Solution
+	searchedAll chan bool
+	timeout     <-chan time.Time
+}
+
+func NewComm(timeout <-chan time.Time) *solutionComm {
+	initBest := Solution{}
+	initBest.totalCost = math.MaxInt32
+	return &solutionComm{
+		initBest,
+		make(chan bool),
+		timeout,
+	}
+}
+func (c *solutionComm) send(r Solution) Money {
+	bestCost := c.best.totalCost
+	if bestCost < r.totalCost {
+		return bestCost
+	}
+
+	flights := make([]*Flight, len(r.flights))
+	copy(flights, r.flights)
+	sort.Sort(byDay(flights))
+	c.best = Solution{flights, r.totalCost}
+	return r.totalCost
+}
+func (c *solutionComm) done() {
+	c.searchedAll <- true
+}
+func (c *solutionComm) wait() {
+	select {
+	case <-c.searchedAll:
+		return
+	case <-c.timeout:
+		return
+	}
 }
 
 type partial struct {
@@ -57,15 +95,9 @@ type partial struct {
 	cost    Money
 }
 
-func (p *partial) solution() []*Flight {
-	flights := make([]*Flight, len(p.flights))
-	for i, f := range p.flights {
-		flights[i] = f
-	}
-	sort.Sort(byDay(flights))
-	return flights
+func (p *partial) solution() Solution {
+	return Solution{p.flights, p.cost}
 }
-
 func (p *partial) roundtrip() bool {
 	ff := p.flights[0]
 	lf := p.lastFlight()
@@ -90,12 +122,17 @@ func (p *partial) backtrack() {
 	p.cost -= f.Cost
 }
 
+type Greedy struct {
+	graph       FlightIndices
+	currentBest Money
+}
+
 func (d *Greedy) dfs(comm comm, partial *partial) {
 	if partial.cost > d.currentBest {
 		return
 	}
 	if partial.roundtrip() {
-		d.currentBest = comm.sendSolution(NewSolution(partial.solution()))
+		d.currentBest = comm.send(partial.solution())
 	}
 
 	lf := partial.lastFlight()
@@ -104,7 +141,6 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 	}
 
 	//dst := d.graph.cityDayCost[lf.To][int(lf.Day+1)%d.graph.size]
-	//fmt.Println(lf, lf.To, lf.Day)
 	if d.graph.cityDayCost[lf.To] == nil {
 		return
 	}
@@ -118,7 +154,6 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 		partial.backtrack()
 	}
 }
-
 func (d Greedy) Solve(comm comm, problem Problem) {
 	if problem.length <= 1000 {
 		flights := make([]*Flight, 0, problem.length)
@@ -136,63 +171,6 @@ func (d Greedy) Solve(comm comm, problem Problem) {
 	} else {
 		//not running
 	}
-}
-
-type comm interface {
-	sendSolution(r Solution) Money
-	send(r Solution, originalEngine int) Money
-	done()
-}
-
-type simpleComm struct {
-	solution Solution
-}
-
-func (t *simpleComm) sendSolution(r Solution) Money {
-	t.solution = r
-	return r.totalCost
-}
-func (t *simpleComm) send(r Solution, originalEngine int) Money {
-	panic("not implemented")
-}
-func (t *simpleComm) done() {
-}
-
-type update struct {
-	solution       Solution
-	engineId       int
-	originalEngine int
-}
-
-type solutionComm struct {
-	solutionReady chan<- update
-	queryBest     chan<- int
-	receiveBest   <-chan Money
-	searchedAll   chan<- int
-	id            int
-}
-
-func (c *solutionComm) sendSolution(r Solution) Money {
-	return c.send(r, c.id)
-}
-
-func (c *solutionComm) send(r Solution, originalEngine int) Money {
-	c.queryBest <- c.id
-	bestCost := <-c.receiveBest
-	if bestCost < r.totalCost {
-		return bestCost
-	}
-
-	solution := make([]*Flight, len(r.flights))
-	copy(solution, r.flights)
-	sort.Sort(byDay(solution))
-
-	c.solutionReady <- update{NewSolution(solution), c.id, originalEngine}
-	return r.totalCost
-}
-
-func (c solutionComm) done() {
-	c.searchedAll <- c.id
 }
 
 func NewSolution(flights []*Flight) Solution {
@@ -222,6 +200,24 @@ type FlightIndices struct {
 	dayCity     [][][]*Flight
 }
 
+type AreaDb struct {
+	cityToArea   map[City]Area
+	areaToCities map[Area][]City
+}
+
+type Problem struct {
+	flights []Flight
+	indices FlightIndices
+	//areas []Area
+	areaDb     AreaDb
+	areaLookup LookupA
+	cityLookup LookupC
+	start      City
+	goal       Area
+	length     int
+	timeLimit  int
+}
+
 type byCost []*Flight
 
 func (f byCost) Len() int {
@@ -246,38 +242,11 @@ func (f byDay) Less(i, j int) bool {
 	return f[i].Day < f[j].Day
 }
 
-type AreaDb struct {
-	cityToArea   map[City]Area
-	areaToCities map[Area][]City
-}
-
-type Problem struct {
-	flights []Flight
-	indices FlightIndices
-	//areas []Area
-	areaDb     AreaDb
-	areaLookup LookupA
-	cityLookup LookupC
-	start      City
-	goal       Area
-	length     int
-	timeLimit  int
-}
-
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
-}
-
-func contains(list []City, city City) bool {
-	for _, c := range list {
-		if c == city {
-			return true
-		}
-	}
-	return false
 }
 
 func cityIndex(city string, l *LookupC) City {
@@ -463,58 +432,12 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 		City(0), areaDb.cityToArea[City(0)], length, timeLimit}
 }
 
-func indexOf(haystack []Area, needle Area) int {
-	for i, item := range haystack {
-		if item == needle {
-			return i
-		}
-	}
-	return -1
-}
-
-func dfs(path []*Flight, location City, visited, toGo []Area, indices FlightIndices) []*Flight {
-	//fmt.Println(path)
-	fmt.Println()
-	fmt.Println("v:", visited)
-	fmt.Println("t:", toGo)
-
-	if len(toGo) == 0 {
-		return path
-	}
-	for _, f := range indices.cityDayCost[location][len(visited)] {
-		if si := indexOf(toGo, f.ToArea); si != -1 {
-			solution := dfs(append(path, f),
-				f.To,
-				append(visited, f.ToArea),
-				append(toGo[:si], toGo[si+1:]...),
-				indices)
-			if len(solution) != 0 {
-				return solution
-			}
-		}
-	}
-	fmt.Println("got lost!")
-	return []*Flight{}
-}
-
 func cost(path []*Flight) Money {
 	var cost Money
 	for _, f := range path {
 		cost += f.Cost
 	}
 	return cost
-}
-
-func solve(p Problem) (s Solution) {
-	visited := make([]Area, 0, p.length)
-	visited = append(visited, 0)
-	toGo := make([]Area, 0, p.length)
-	path := make([]*Flight, 0, p.length)
-	for i := 1; i < p.length; i++ {
-		toGo = append(toGo, Area(i))
-	}
-	finalPath := dfs(path, 0, visited, toGo, p.indices)
-	return Solution{finalPath, cost(finalPath)}
 }
 
 func printSolution(s Solution, p Problem) {
@@ -530,11 +453,15 @@ func printSolution(s Solution, p Problem) {
 
 func main() {
 	start_time := time.Now()
+	//TODO: proper timeout
+	timeout := time.After(60 * time.Second)
 	p := readInput(bufio.NewScanner(os.Stdin))
 	g := Greedy{p.indices, math.MaxInt32}
-	c := &simpleComm{}
-	g.Solve(c, p)
-	printSolution(c.solution, p)
+	c := NewComm(timeout)
+	go g.Solve(c, p)
+	c.wait()
+
+	printSolution(c.best, p)
 
 	fmt.Fprintln(os.Stderr, "Ending after", time.Since(start_time))
 }
