@@ -156,13 +156,17 @@ func (d *sa) run(comm comm, problem Problem) {
 	n := len(current.flights)
 	for {
 		i, j := order(seed.Intn(n-1)+1, seed.Intn(n-1)+1)
-		ok, newCost := swap(current, g, i, j)
+		ok, newCost := swap(current, g, i, j, false)
 		if ok {
 			//TODO swap back only sometimes
 			if best > newCost {
-				fmt.Fprintln(os.Stderr, "sa new solution")
-				comm.send(Solution{flights, newCost})
-				swap(current, g, i, j)
+				fmt.Fprintln(os.Stderr, "sa new solution", best, "->", newCost)
+				swap(current, g, i, j, true)
+				best = comm.send(Solution{flights, newCost})
+				current = comm.current()
+				flights = current.flights
+				//best = current.totalCost
+				//return
 			}
 		}
 	}
@@ -176,7 +180,7 @@ fiPrev fi     fjPrev fj
 a->d   d->c   c->b   b->a
 giPrev gi     gjPrev gj
 */
-func swap(s Solution, g Graph, i, j int) (bool, Money) {
+func swap(s Solution, g Graph, i, j int, really bool) (bool, Money) {
 	if i == j {
 		return false, 0
 	}
@@ -192,12 +196,15 @@ func swap(s Solution, g Graph, i, j int) (bool, Money) {
 	gi := g.get(fj.From, fi.Day, fi.To)
 	gj := g.get(fi.From, fj.Day, fj.To)
 	if giPrev != nil && gjPrev != nil && gi != nil && gj != nil {
-		flights[prevI] = giPrev
-		flights[i] = gi
-		flights[prevJ] = gjPrev
-		flights[j] = gj
 		oldCost := fiPrev.Cost + fi.Cost + fjPrev.Cost + fj.Cost
 		newCost := giPrev.Cost + gi.Cost + gjPrev.Cost + gj.Cost
+		if really {
+			flights[prevI] = giPrev
+			flights[i] = gi
+			flights[prevJ] = gjPrev
+			flights[j] = gj
+			fmt.Fprintln(os.Stderr, "swapping", i, j, s.totalCost, oldCost, "->", newCost, s.totalCost - oldCost + newCost)
+		}
 		return true, s.totalCost - oldCost + newCost
 	}
 	return false, 0
@@ -241,7 +248,7 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 	}
 }
 func (d Greedy) Solve(comm comm, problem Problem) {
-	if len(problem.cityLookup.indexToName) > 200 {
+	if len(problem.cityLookup.indexToName) > 10 {
 		d.endOnFirst = true
 	}
 	flights := make([]*Flight, 0, problem.length)
@@ -522,6 +529,7 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 		flights = append(flights, f)
 		createIndexAD(indices.areaDayCost, fromArea, day, f)
 		createIndexCD(indices.cityDayCost, from, day, f)
+		fromDayTo(indices.fromDayTo, f)
 
 	}
 	if length <= 20 {
@@ -567,6 +575,31 @@ func printSolution(s Solution, p Problem) {
 	}
 }
 
+func validateSolution(s Solution, p Problem) {
+	length := 0
+	prevF := s.flights[0]
+	totalCost := Money(prevF.Cost)
+	visited := make(map[Area]bool)
+	for _, f := range s.flights[1:] {
+		totalCost += f.Cost
+		if prevF.To != f.From || prevF.Day != (f.Day - 1) {
+			fmt.Fprintln(os.Stderr, f, "doesnt follow", prevF, "@", length)
+		}
+		if visited[f.ToArea] {
+			fmt.Fprintln(os.Stderr, f, "tries to revisit", p.areaLookup.indexToName[f.To])
+		}
+		length += 1
+		visited[f.ToArea] = true
+		prevF = f
+	}
+	if totalCost != s.totalCost {
+		fmt.Fprintln(os.Stderr, s.totalCost, "!=", totalCost)
+	}
+	if length != (p.length - 1) {
+		fmt.Fprintln(os.Stderr, p.length, "!=", length)
+	}
+}
+
 func main() {
 	start_time := time.Now()
 	//defer profile.Start(profile.MemProfile).Stop()
@@ -578,6 +611,7 @@ func main() {
 	c.wait()
 
 	printSolution(c.best, p)
+	validateSolution(c.best, p)
 
 	fmt.Fprintln(os.Stderr, "Ending after", time.Since(start_time))
 }
