@@ -9,8 +9,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+var seed = rand.New(rand.NewSource(time.Now().UnixNano()))
+var problem Problem
 
 /* Notes:
  * - more identical flights with different prices can appear - filter during input reading?
@@ -46,12 +50,29 @@ type Flight struct {
 	Penalty   float64
 }
 
+func p(arr []string, i int) string {
+	if len(arr) > i {
+		return arr[i]
+	} else {
+		return fmt.Sprintf("%v", i)
+	}
+}
+
+func (f *Flight) String() string {
+	return fmt.Sprintf("{[%v/%v]->[%v/%v]d%v:$%v}",
+		p(problem.areaLookup.indexToName, int(f.FromArea)),
+		p(problem.cityLookup.indexToName, int(f.From)),
+		p(problem.areaLookup.indexToName, int(f.ToArea)),
+		p(problem.cityLookup.indexToName, int(f.To)), f.Day, f.Cost)
+}
+
 type comm interface {
 	send(r Solution) Money
 	done()
 	current() Solution
 }
 type solutionComm struct {
+	mutex       *sync.Mutex
 	best        Solution
 	searchedAll chan bool
 	timeout     <-chan time.Time
@@ -61,17 +82,26 @@ func NewComm(timeout <-chan time.Time) *solutionComm {
 	initBest := Solution{}
 	initBest.totalCost = math.MaxInt32
 	return &solutionComm{
+		&sync.Mutex{},
 		initBest,
 		make(chan bool),
 		timeout,
 	}
 }
 func (c *solutionComm) current() Solution {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	flights := make([]*Flight, len(c.best.flights))
 	copy(flights, c.best.flights)
 	return Solution{flights, c.best.totalCost}
 }
 func (c *solutionComm) send(r Solution) Money {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if bullshit(r) {
+		panic("bullshit")
+		return c.best.totalCost
+	}
 	bestCost := c.best.totalCost
 	if bestCost < r.totalCost {
 		return bestCost
@@ -142,34 +172,77 @@ func order(i, j int) (int, int) {
 }
 
 type sa struct {
-	graph FlightIndices
+	graph  FlightIndices
+	areaDb AreaDb
 }
 
-func (d *sa) run(comm comm, problem Problem) {
+func (d *sa) run(comm comm) {
 	current := comm.current()
 	cost := current.totalCost
 	best := cost
 	flights := current.flights
 	g := problem.indices.fromDayTo
+	areadb := problem.areaDb
 	//temp := 0
-	seed := rand.New(rand.NewSource(time.Now().UnixNano()))
-	n := len(current.flights)
+	maxCitySwap, maxAreaSwap := len(flights)-2, len(flights)-1
+	actions, action := 2, 0
 	for {
-		i, j := order(seed.Intn(n-1)+1, seed.Intn(n-1)+1)
-		ok, newCost := swap(current, g, i, j, false)
-		if ok {
-			//TODO swap back only sometimes
-			if best > newCost {
-				fmt.Fprintln(os.Stderr, "sa new solution", best, "->", newCost)
-				swap(current, g, i, j, true)
-				best = comm.send(Solution{flights, newCost})
-				current = comm.current()
-				flights = current.flights
-				//best = current.totalCost
-				//return
+		action = (action + 1) % actions
+		newBest := false
+		if action == 0 {
+			//don't swap first and last city
+			i, j := flightSwapIndices(maxCitySwap)
+			ok, newCost := swapFlights(current, g, i, j, false)
+			if ok && best > newCost {
+				best, newBest, current.totalCost = newCost, true, newCost
+				swapFlights(current, g, i, j, true)
+			}
+		} else {
+			//don't swap first city but can swap last city
+			ok, fi, ci := areaSwapIndex(maxAreaSwap, flights, areadb)
+			if !ok {
+				continue
+			}
+			ok, newCost := swapInArea(current, g, fi, ci, false)
+			if ok && best > newCost {
+				best, newBest, current.totalCost = newCost, true, newCost
+				swapInArea(current, g, fi, ci, true)
 			}
 		}
+		if newBest {
+			fmt.Fprintln(os.Stderr, "sa new solution", best)
+			best = comm.send(Solution{flights, best})
+		}
 	}
+}
+
+/*
+0 ---- 1 ---- 2 ---- 4
+A      B      C      A
+a->b   b->c   c->d
+fiPrev fi
+a->X   X->c   c->d
+giPrev gi
+*/
+func swapInArea(s Solution, g Graph, i int, x City, really bool) (bool, Money) {
+	flights := s.flights
+	prevI := i - 1
+	fiPrev := flights[prevI]
+	giPrev := g.get(fiPrev.From, fiPrev.Day, x)
+	fi := flights[i]
+	gi := g.get(x, fi.Day, fi.To)
+	if giPrev != nil && gi != nil {
+		oldCost := fiPrev.Cost + fi.Cost
+		newCost := giPrev.Cost + gi.Cost
+		if really {
+			flights[prevI] = giPrev
+			flights[i] = gi
+			//			fmt.Fprintf(os.Stderr, "swapping in area from %v %v\n", fiPrev, fi)
+			//			fmt.Fprintf(os.Stderr, "swapping in area to   %v %v\n", giPrev, gi)
+		}
+		return true, s.totalCost - oldCost + newCost
+	}
+	return false, 0
 }
 
 /*
@@ -180,10 +253,7 @@ fiPrev fi     fjPrev fj
 a->d   d->c   c->b   b->a
 giPrev gi     gjPrev gj
 */
-func swap(s Solution, g Graph, i, j int, really bool) (bool, Money) {
-	if i == j {
-		return false, 0
-	}
+func swapFlights(s Solution, g Graph, i, j int, really bool) (bool, Money) {
 	flights := s.flights
 	prevI := i - 1
 	prevJ := j - 1
@@ -203,11 +273,45 @@ func swap(s Solution, g Graph, i, j int, really bool) (bool, Money) {
 			flights[i] = gi
 			flights[prevJ] = gjPrev
 			flights[j] = gj
-			fmt.Fprintln(os.Stderr, "swapping", i, j, s.totalCost, oldCost, "->", newCost, s.totalCost - oldCost + newCost)
+			//fmt.Fprintf(os.Stderr, "swapping from %v %v %v %v\n", fiPrev, fi, fjPrev, fj)
+			//fmt.Fprintf(os.Stderr, "swapping to   %v %v %v %v\n", giPrev, gi, gjPrev, gj)
 		}
 		return true, s.totalCost - oldCost + newCost
 	}
 	return false, 0
+}
+
+//TODO: could use some heuristics instead of random maybe
+func flightSwapIndices(n int) (int, int) {
+	i := seed.Intn(n)
+	j := seed.Intn(n)
+	for ; j == i; j = seed.Intn(n) {
+	}
+	return order(i+1, j+1)
+}
+
+//TODO: could use some heuristics instead of random maybe
+func areaSwapIndex(n int, flights []*Flight, areadb AreaDb) (bool, int, City) {
+	fi := seed.Intn(n-1) + 1
+	from := flights[fi].From
+	a := areadb.cityToArea[from]
+	area := areadb.areaToCities[a]
+	if len(area) < 2 {
+		return false, 0, 0
+	}
+	/*for _, city := range area {
+		fmt.Fprintf(os.Stderr, "area %v/%v contains %v/%v\n", a, problem.areaLookup.indexToName[a], city, problem.cityLookup.indexToName[city])
+	}*/
+	ci := seed.Intn(len(area))
+	max := 5
+	for ; area[ci] == from && max > 0; ci = seed.Intn(len(area)) {
+		max--
+	}
+	if max == 0 {
+		return false, 0, 0
+	}
+
+	return true, fi, City(area[ci])
 }
 
 type Greedy struct {
@@ -233,21 +337,31 @@ func (d *Greedy) dfs(comm comm, partial *partial) {
 	if partial.hasVisited(lf.ToArea) {
 		return
 	}
-	//dst := d.graph.cityDayCost[lf.To][int(lf.Day+1)%d.graph.size]
-	if d.graph.cityDayCost[lf.To] == nil {
-		return
+	var dst []*Flight
+	if len(partial.flights) == partial.n-1 {
+		if d.graph.areaDayCost[lf.ToArea] == nil {
+			return
+		}
+		if d.graph.areaDayCost[lf.ToArea][lf.Day+1] == nil {
+			return
+		}
+		dst = d.graph.areaDayCost[lf.ToArea][lf.Day+1]
+	} else {
+		if d.graph.cityDayCost[lf.To] == nil {
+			return
+		}
+		if d.graph.cityDayCost[lf.To][lf.Day+1] == nil {
+			return
+		}
+		dst = d.graph.cityDayCost[lf.To][lf.Day+1]
 	}
-	if d.graph.cityDayCost[lf.To][lf.Day+1] == nil {
-		return
-	}
-	dst := d.graph.cityDayCost[lf.To][lf.Day+1]
 	for _, f := range dst {
 		partial.fly(f)
 		d.dfs(comm, partial)
 		partial.backtrack()
 	}
 }
-func (d Greedy) Solve(comm comm, problem Problem) {
+func (d Greedy) Solve(comm comm) {
 	if len(problem.cityLookup.indexToName) > 10 {
 		d.endOnFirst = true
 	}
@@ -266,7 +380,7 @@ func (d Greedy) Solve(comm comm, problem Problem) {
 		comm.done()
 	} else {
 		sa := sa{}
-		sa.run(comm, problem)
+		sa.run(comm)
 	}
 }
 
@@ -433,7 +547,7 @@ func fromDayTo(slice [][][]*Flight, f *Flight) {
 	}
 }
 
-func readInput(stdin *bufio.Scanner) (p Problem) {
+func readInput(stdin *bufio.Scanner) {
 	lookupC := &LookupC{make(map[string]City), make([]string, 0, MAX_CITIES)}
 	lookupA := &LookupA{make(map[string]Area), make([]string, 0, MAX_AREAS)}
 	areaDb := &AreaDb{make(map[City]Area), make(map[Area][]City)}
@@ -464,15 +578,14 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 	var area string
 	var areaId Area
 	var cityId City
-	var cities []string
-	var cityIds []City
+	cities := make([]string, 0)
 	for i := 0; i < length; i++ {
 		stdin.Scan()
 		area = stdin.Text()
 		stdin.Scan()
 		cities = strings.Split(stdin.Text(), " ")
+		cityIds := make([]City, 0, len(cities))
 		areaId = areaIndex(area, lookupA)
-		//cityIds = make([]City)
 		for _, src := range cities {
 			cityId = cityIndex(src, lookupC)
 			areaDb.cityToArea[cityId] = areaId
@@ -552,7 +665,7 @@ func readInput(stdin *bufio.Scanner) (p Problem) {
 		}
 	}
 
-	return Problem{flights, *indices, *areaDb, *lookupA, *lookupC,
+	problem = Problem{flights, *indices, *areaDb, *lookupA, *lookupC,
 		City(0), areaDb.cityToArea[City(0)], length, timeLimit}
 }
 
@@ -564,29 +677,55 @@ func cost(path []*Flight) Money {
 	return cost
 }
 
-func printSolution(s Solution, p Problem) {
+func printSolution(s Solution) {
 	fmt.Println(s.totalCost)
-	for i := 0; i < p.length; i++ {
-		fmt.Println(p.cityLookup.indexToName[s.flights[i].From],
-			p.cityLookup.indexToName[s.flights[i].To],
+	for i := 0; i < problem.length; i++ {
+		fmt.Println(problem.cityLookup.indexToName[s.flights[i].From],
+			problem.cityLookup.indexToName[s.flights[i].To],
 			i+1,
 			s.flights[i].Cost,
 		)
 	}
 }
 
-func validateSolution(s Solution, p Problem) {
+func bullshit(s Solution) bool {
 	length := 0
 	prevF := s.flights[0]
 	totalCost := Money(prevF.Cost)
 	visited := make(map[Area]bool)
 	for _, f := range s.flights[1:] {
 		totalCost += f.Cost
-		if prevF.To != f.From || prevF.Day != (f.Day - 1) {
+		if prevF.To != f.From || prevF.Day != (f.Day-1) {
+			fmt.Fprintln(os.Stderr, f, "doesnt follow", prevF, "@", length)
+			return true
+		}
+		if visited[f.ToArea] {
+			fmt.Fprintln(os.Stderr, f, "tries to revisit area", problem.areaLookup.indexToName[f.ToArea])
+			return true
+		}
+		length += 1
+		visited[f.ToArea] = true
+		prevF = f
+	}
+	if totalCost != s.totalCost {
+		fmt.Fprintln(os.Stderr, s.totalCost, "!=", totalCost)
+		return true
+	}
+	return false
+}
+
+func validateSolution(s Solution) {
+	length := 0
+	prevF := s.flights[0]
+	totalCost := Money(prevF.Cost)
+	visited := make(map[Area]bool)
+	for _, f := range s.flights[1:] {
+		totalCost += f.Cost
+		if prevF.To != f.From || prevF.Day != (f.Day-1) {
 			fmt.Fprintln(os.Stderr, f, "doesnt follow", prevF, "@", length)
 		}
 		if visited[f.ToArea] {
-			fmt.Fprintln(os.Stderr, f, "tries to revisit", p.areaLookup.indexToName[f.To])
+			fmt.Fprintln(os.Stderr, f, "tries to revisit", problem.areaLookup.indexToName[f.To])
 		}
 		length += 1
 		visited[f.ToArea] = true
@@ -595,23 +734,23 @@ func validateSolution(s Solution, p Problem) {
 	if totalCost != s.totalCost {
 		fmt.Fprintln(os.Stderr, s.totalCost, "!=", totalCost)
 	}
-	if length != (p.length - 1) {
-		fmt.Fprintln(os.Stderr, p.length, "!=", length)
+	if length != (problem.length - 1) {
+		fmt.Fprintln(os.Stderr, problem.length, "!=", length)
 	}
 }
 
 func main() {
 	start_time := time.Now()
 	//defer profile.Start(profile.MemProfile).Stop()
-	p := readInput(bufio.NewScanner(os.Stdin))
-	g := Greedy{graph: p.indices, currentBest: math.MaxInt32}
-	timeout := time.After(p.timeLimit*time.Second - time.Since(start_time) - 45*time.Millisecond)
+	readInput(bufio.NewScanner(os.Stdin))
+	g := Greedy{graph: problem.indices, currentBest: math.MaxInt32}
+	timeout := time.After(problem.timeLimit*time.Second - time.Since(start_time) - 45*time.Millisecond)
 	c := NewComm(timeout)
-	go g.Solve(c, p)
+	go g.Solve(c)
 	c.wait()
 
-	printSolution(c.best, p)
-	validateSolution(c.best, p)
+	printSolution(c.current())
+	validateSolution(c.current())
 
 	fmt.Fprintln(os.Stderr, "Ending after", time.Since(start_time))
 }
